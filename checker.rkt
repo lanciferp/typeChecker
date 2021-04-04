@@ -1,4 +1,6 @@
 #lang plait
+(require (typed-in "parser.rkt" [
+
 (define (typecheck [expr : Expr])
   (type-case Expr expr
     [(numE n) (numT)]
