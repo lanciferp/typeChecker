@@ -1,51 +1,49 @@
 #lang plait
-(require (typed-in "parser.rkt" [
 
-(define (typecheck [expr : Expr])
-  (type-case Expr expr
-    [(numE n) (numT)]
-    [(plusE l r) 
-     (let ([lt (typecheck l)] 
-           [rt (typecheck r)])
-       (if (and (equal? lt (numT))
-                (equal? rt (numT)))
-         (numT)
-         (error 'e "Not Both Numbers")))]
-    [(equalE l r) 
-     (let ([lt (typecheck l)] 
-           [rt (typecheck r)])
-       (if (and (equal? lt (numT))
-                (equal? rt (numT)))
-         (boolT)
-         (error 'e "Not Both Numbers")))]
-   [(notE a) 
-     (let ([at (typecheck a)]) 
-       (if (equal? at (boolT))
-         (boolT)
-         (error 'e "Not Both Bools")))]))
+(define-type Expr
+  (num [n : Number])
+  (id [x : Symbol])
+  (bool [b : Boolean])
+  (bin-num-op [op : (Number Number -> Number)] [lhs : Expr] [rhs : Expr])
+  (iszero [e : Expr])
+  (bif [test : Expr] [then : Expr] [else : Expr])
+  (with [bound-x : Symbol] [bound-body : Expr] [body : Expr])
+  (fun [arg-x : Symbol]
+       [arg-type : Type]
+       [body : Expr]
+       [body-type : Type])
+  (app [fun : Expr] [arg : Expr])
+  (nempty)
+  (ncons [first : Expr] [rest : Expr])
+  (nfirst [e : Expr])
+  (nrest [e : Expr])
+  (isnempty [e : Expr]))
+
+(define-type Type
+  (t-num)
+  (t-bool)
+  (t-nlist)
+  (t-fun [arg : Type] [result : Type]))
 
 (define (lookup gamma x) (gamma x))
 
 (define (extend gamma x t)
   (λ (y) (if (equal? x y) t (lookup gamma y))))
 
-(define-type Type
-  (numT)
-  (arrowT [domain : Type] [range : Type]))
+(define (typecheck [gamma : (Symbol -> Type)]  [expr : Expr])
+  (type-case Expr expr
+    [(num n) (t-num)]
+    [(bin-num-op op l r)
+     (let ([lt (typecheck gamma l)]
+           [rt (typecheck gamma r)])
+       (if (and (equal? lt (t-num))
+                (equal? rt (t-num)))
+         (t-num)
+         (error 'e "Not Both Numbers")))]
+    [else (error 'e "NOT DONE")]))
+(define (mt-gamma [x : Symbol]) : Type
+  (error 'e "UNDOUND"))
 
-(define-type Expr
-  ....
-  (recE [f : Symbol] [x : Symbol] [t-in : Type] [t-out : Type] [e : Expr])
-  ....)
-
-(define (tc gamma e)
-  (type-case Expr e
-    ....
-    [(recE f x t-in t-out e)
-     (let ([extended-e (extend gamma x t-in)])
-       (cond
-        [(not (equal? t-out (tc
-                                (extend extended-e x t-out) e)))
-              (error 'tc "body return type not correct")]
-        [else (arrowT t-in t-out)]))] ; fill in here (and only here)
-    ....))
+(define (type-of [expr : Expr]) : Type
+  (typecheck mt-gamma expr)
+  )

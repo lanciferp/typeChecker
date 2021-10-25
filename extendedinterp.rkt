@@ -1,0 +1,204 @@
+#lang plait
+(define-type CFWAE
+  (numC [n : Number])
+  (binopC [op : Op] [lhs : CFWAE] [rhs : CFWAE])
+  (withC [lob : (Listof Binding)] [body : CFWAE])
+  (idC [x : Symbol])
+  (if0C [c : CFWAE] [t : CFWAE] [e : CFWAE])
+  (funC [args : (Listof Symbol)] [body : CFWAE])
+  (appC [f : CFWAE] [args : (Listof CFWAE)]))
+
+(define-type Op
+  (plusOp)
+  (minusOp)
+  (multOp)
+  (divOp))
+
+(define-type Binding
+  (binding [x : Symbol] [bound-expr : CFWAE]))
+
+(define (parse-binding [s : S-Exp])
+  (letrec ([bl (s-exp->list s)]
+           [id (parse (first bl))]
+           [exp (parse (second bl))])
+    (type-case CFWAE id
+      [(idC x) (binding x exp)]
+      [else (error 'e "Binding must start with symbol")])))
+
+(define (parse-bindings [sl : (Listof S-Exp)]) 
+  (type-case (Listof S-Exp) sl
+    [(cons s more-s) (letrec ([bl (s-exp->list s)]
+                              [id (parse (first bl))]
+                              [exp (parse (second bl))])
+                       (type-case CFWAE id
+                         [(idC x) (if (equal? 2 (length bl)) (cons (binding x exp) (parse-bindings more-s)) (error 'e "Binding Error"))]
+                         [else (error 'e "Binding must start with symbol")]))]
+    [empty empty]))
+
+(define (parse-symbols [sl : (Listof S-Exp)])
+  (type-case (Listof S-Exp) sl
+    [(cons s more-s) (cond
+                       [(s-exp-symbol? s) (cons (s-exp->symbol s) (parse-symbols more-s))]
+                       [else (error 'e "Not an Id")])]
+    [empty empty]))
+
+(define (parse-args [sl : (Listof S-Exp)])
+  (type-case (Listof S-Exp) sl
+    [(cons s more-s) (cons (parse s) (parse-args more-s))]
+    [empty empty]))
+
+(define (parse [s : S-Exp]) : CFWAE
+  (cond
+    [(s-exp-list? s)
+     (let ([sl (s-exp->list s)])
+       (cond
+         [(s-exp-symbol? (first sl))
+                         (let ([sym (s-exp->symbol (first sl))])
+                           (cond
+                             [(eq? sym '+) (if (equal? (length sl) 3) (binopC (plusOp) (parse (second sl)) (parse (third sl)))
+                                               (error 'e "Too many args"))]
+                             [(eq? sym '*) (if (eq? (length sl) 3) (binopC (multOp) (parse (second sl)) (parse (third sl)))
+                                               (error 'e "Too many args"))]
+                             [(eq? sym '-) (if (eq? (length sl) 3) (binopC (minusOp) (parse (second sl)) (parse (third sl)))
+                                               (error 'e "Too many args"))]
+                             [(eq? sym '/) (if (eq? (length sl) 3) (binopC (divOp) (parse (second sl)) (parse (third sl)))
+                                               (error 'e "Too many args"))]
+                             [(eq? sym 'if0) (if0C (parse (second sl)) (parse (third sl)) (parse (fourth sl)))]
+                             [(s-exp-list? (second sl))
+                              (cond
+                                [(eq? sym 'with) (withC (parse-bindings (s-exp->list (second sl))) (parse (third sl)))]
+                                [(eq? sym 'fun) (funC (parse-symbols (s-exp->list (second sl))) (parse (third sl)))]
+                                [else (error 'parse "invalid list input")])]
+                             [(eq? sym 'with) (withC (cons (parse-binding (second sl)) empty) (parse (third sl)))]
+                             [(eq? sym 'fun) (funC (cons (s-exp->symbol (second sl)) empty) (parse (third sl)))]
+                             [else (appC (parse (first sl)) (parse-args (rest sl)))]
+                            ; [else (error 'e "invalid list input")]
+                             ))]
+         [(s-exp-list? (second sl)) (appC (parse (first sl)) (parse-args (s-exp->list (second sl))))]
+         [else (appC (parse (first sl)) (parse-args (rest sl)))]
+         ))]
+    [(s-exp-match? `NUMBER s) (numC (s-exp->number s))]
+    [(s-exp-match? `SYMBOL s) (idC (s-exp->symbol s))]
+    [else (error 'e "Unknown S-Exp")]))
+
+; Tests for Parse
+
+(test (parse `5) (numC 5))
+(test (parse `g) (idC 'g))
+(test (parse `8h) (idC '8h))
+(test/exn (parse `"") "")
+(test (parse `gobbledeegook) (idC 'gobbledeegook))
+(test (parse `(- 2 8)) (binopC (minusOp) (numC 2) (numC 8)))
+(test (parse `(* 0 2)) (binopC (multOp) (numC 0) (numC 2)))
+(test (parse `(+ 5 6)) (binopC (plusOp) (numC 5) (numC 6)))
+(test (parse `(/ 6 0)) (binopC (divOp) (numC 6) (numC 0)));passes parsing, but is caught in interp
+(test/exn (parse `(+ 1 2 3)) "")
+(test (parse `(a a a)) (appC (idC 'a) (list (idC 'a) (idC 'a))))
+(test (parse `(with ([x 6] [y 5]) (+ x y))) (withC (list (binding 'x (numC 6)) (binding 'y (numC 5))) (binopC (plusOp) (idC 'x) (idC 'y))))
+(test/exn (parse `(with ([x y 6] [y 5]) (+ x y))) "")
+(test (parse `(fun (x g y) (+ (* x g) y))) (funC (list 'x 'g 'y) (binopC (plusOp) (binopC (multOp) (idC 'x) (idC 'g)) (idC 'y))))
+(test/exn (parse `(fun (x g 6) (+ (* x g) y))) "")
+(test (parse `(if0 0 (+ 1 1) (- 1 1))) (if0C (numC 0) (binopC (plusOp) (numC 1) (numC 1)) (binopC (minusOp) (numC 1) (numC 1))))
+(test (parse `(if0 x (+ 1 1) (- 1 1))) (if0C (idC 'x) (binopC (plusOp) (numC 1) (numC 1)) (binopC (minusOp) (numC 1) (numC 1))))
+(test (parse `(2 5)) (appC (numC 2) (list (numC 5))))
+(test (parse `(x 4 5 6)) (appC (idC 'x) (list (numC 4) (numC 5) (numC 6))))
+
+
+
+(define-type CFWAE-Value
+  (numV [n : Number])
+  (closureV [params : (Listof Symbol)]
+            [body : CFWAE]
+            [env : Env]))
+
+(define-type Env
+  (mtEnv)
+  (anEnv [name : Symbol] [value : CFWAE-Value] [env : Env]))
+
+(define (lookup [x : Symbol] [env : Env]) : CFWAE-Value
+  (type-case Env env
+    [(mtEnv) (error 'e "Unbound identifier")]
+    [(anEnv n v e) (if (equal? n x) v (lookup x e))]
+    ))
+
+(define (extend-env [lob : (Listof Binding)] [env : Env]) : Env
+  (type-case (Listof Binding) lob
+    [(cons b more-bs) (extend-env more-bs (anEnv (binding-x b) (interp (binding-bound-expr b) env) env))]
+    [empty env]))
+
+
+(define (contains-item [x : 'a] [lx : (Listof 'a)])
+  (type-case (Listof 'a) lx
+    [empty #f]
+    [(cons a more-as) (if (equal? x a) #t (contains-item x more-as))]
+    ))
+
+(define (contains-binding [b : Binding] [lb : (Listof Binding)])
+  (type-case (Listof Binding) lb
+    [empty #f]
+    [(cons x more-xs) (if (equal? (binding-x x) (binding-x b)) #t (contains-binding b more-xs))]
+    ))
+
+(define (unique-item [la : (Listof 'a)])
+  (type-case (Listof 'a) la
+    [empty #t]
+    [(cons a more-as) (and (not (contains-item a more-as)) (unique-item more-as))]))
+
+(define (app-extend-env [params : (Listof Symbol)] [args : (Listof CFWAE)] [env : Env]) : Env
+  (type-case (Listof Symbol) params
+    [(cons p more-ps) (type-case (Listof CFWAE) args
+             [(cons a more-as) (app-extend-env more-ps more-as (anEnv p (interp a env) env))]
+             [empty (error 'e "mismatched args and params")])]
+    [empty (type-case (Listof CFWAE) args
+             [(cons a more-as) (error 'e "mismatched args and params")]
+             [empty env])]))
+
+(define (interp [exp : CFWAE] [env : Env] ) : CFWAE-Value
+  (type-case CFWAE exp
+    [(numC n) (numV n)]
+    [(binopC op lhs rhs) (let ([lv (interp lhs env)]
+                               [rv (interp rhs env)])
+                            (type-case CFWAE-Value lv
+                          [(numV l)
+                           (type-case CFWAE-Value rv
+                             [(numV r) (numV
+                                        (try (type-case Op op
+                                               [(plusOp) (+ l r)]
+                                               [(minusOp) (- l r)]
+                                               [(multOp) (* l r)]
+                                               [(divOp) (if (equal? 0 r) (error 'e "Error") (/ l r))])
+                                             (lambda () (error 'e "Error"))))]
+                             [else (error 'e "Error")])]
+                          [else (error 'e "Error")]))]
+
+
+    
+    [(withC lob body) (let ([extended-env (extend-env lob env)])
+                        (interp body extended-env))]
+    [(idC x) (lookup x env)]
+    [(if0C c t e) (if (equal? (numV 0) (interp c env)) (interp t env) (interp e env))]
+    [(funC args body) (if (unique-item args) (closureV args body env) (error 'e "Identifier already defined" ))]
+    [(appC f args) (type-case CFWAE f
+                     [(funC fargs body) (let ([aClosure (interp f env)])
+                                         (interp (closureV-body aClosure) (app-extend-env (closureV-params aClosure) args (closureV-env aClosure))))]
+                     [else (error 'e "Cannot start app with non-fun")])]
+    ))
+
+(test (interp (parse `(+ 5 6)) (mtEnv)) (numV 11))
+(test (interp (parse `5) (mtEnv)) (numV 5))
+(test/exn (interp (parse `g) (mtEnv)) "") ; unbound identifier
+(test (interp (parse `(- 2 8)) (mtEnv)) (numV -6))
+(test (interp (parse `(* 0 2)) (mtEnv)) (numV 0))
+(test (interp (parse `(+ 5 6)) (mtEnv)) (numV 11))
+(test/exn (interp (parse `(/ 6 0)) (mtEnv)) "") ; divide by zero
+(test/exn (interp (parse `(with ([x 0]) (/ 4 x))) (mtEnv)) "")
+(test (interp (parse `(with ([x 1]) (/ 4 x))) (mtEnv)) (numV 4))
+(test (interp (parse `(fun (x y) (+ x y))) (mtEnv)) (closureV (list 'x 'y) (binopC (plusOp) (idC 'x) (idC 'y)) (mtEnv)))
+(test/exn (interp (parse `(fun (6 y) (+ x y))) (mtEnv)) "")
+(test (interp (parse `((fun (x y) (+ x y)) 5 4)) (mtEnv)) (numV 9))
+(test/exn (interp (parse `((funn (x y) (+ x y)) 5 4)) (mtEnv)) "")
+(test (interp (parse `((fun (x) (/ 4 x)) 1)) (mtEnv)) (numV 4))
+(test/exn (interp (parse `((fun (x) (/ 4 x)) 0)) (mtEnv)) "")
+
+
+    
